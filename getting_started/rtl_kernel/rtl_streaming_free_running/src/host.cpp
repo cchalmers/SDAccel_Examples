@@ -46,7 +46,7 @@ decltype(&clReadStream) xcl::Stream::readStream = nullptr;
 decltype(&clWriteStream) xcl::Stream::writeStream = nullptr;
 decltype(&clPollStreams) xcl::Stream::pollStreams = nullptr;
 
-auto constexpr c_test_size = 256 * 1024 * 1024; //256 MB data
+auto constexpr c_test_size = 4096; // 4 KB data
 
 ////////////////////RESET FUNCTION///////////////////////////////////////////
 int reset(int *a, int *sw_results, int *hw_results, unsigned int size) {
@@ -73,12 +73,6 @@ int verify(int *sw_results, int *hw_results, int size) {
 ////////MAIN FUNCTION//////////
 int main(int argc, char **argv) {
     unsigned int size = c_test_size;
-
-    if (xcl::is_hw_emulation()) {
-        size = 4096; // 4KB for HW emulation
-    } else if (xcl::is_emulation()) {
-        size = 2 * 1024 * 1024; // 4MB for sw emulation
-    }
 
     // I/O Data Vectors
     std::vector<int, aligned_allocator<int>> h_a(size);
@@ -166,39 +160,45 @@ int main(int argc, char **argv) {
               read_stream = xcl::Stream::createStream(
                   device.get(), CL_STREAM_READ_ONLY, CL_STREAM, &ext, &ret));
 
-    // Initiating the WRITE transfer
-    cl_stream_xfer_req wr_req{0};
+    for (int i = 0; i < 10000000; i++) {
 
-    wr_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
-    wr_req.priv_data = (void *)"write_a";
+        // Initiating the WRITE transfer
+        cl_stream_xfer_req wr_req{0};
 
-    // Thread 1 for writing data to input stream 1 independently in case of default blocking transfers.
-    xcl::Stream::writeStream(
-        write_stream_a,
-        h_a.data(),
-        vector_size_bytes,
-        &wr_req,
-        &ret);
+        wr_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
+        wr_req.priv_data = (void *)"write_a";
 
-    // Initiating the READ transfer
-    cl_stream_xfer_req rd_req{0};
-    rd_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;;
-    rd_req.priv_data = (void *)"read";
-    // Output thread to read the stream data independently in case of default blocking transfers.
-    xcl::Stream::readStream(
-        read_stream,
-        hw_results.data(),
-        vector_size_bytes,
-        &rd_req,
-        &ret);
+        // Thread 1 for writing data to input stream 1 independently in case of default blocking transfers.
+        xcl::Stream::writeStream(
+            write_stream_a,
+            h_a.data(),
+            vector_size_bytes,
+            &wr_req,
+            &ret);
 
-    // Checking the request completion
-    cl_streams_poll_req_completions poll_req[2]{0, 0}; // 2 Requests
-    auto num_compl = 2;
-    OCL_CHECK(ret,
-        xcl::Stream::pollStreams(
-          device.get(), poll_req, 2, 2, &num_compl, 100, &ret));
+        // Initiating the READ transfer
+        cl_stream_xfer_req rd_req{0};
+        rd_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;;
+        rd_req.priv_data = (void *)"read";
+        // Output thread to read the stream data independently in case of default blocking transfers.
+        xcl::Stream::readStream(
+            read_stream,
+            hw_results.data(),
+            vector_size_bytes,
+            &rd_req,
+            &ret);
 
+        // Checking the request completion
+        cl_streams_poll_req_completions poll_req[2]{0, 0}; // 2 Requests
+        auto num_compl = 2;
+        OCL_CHECK(ret,
+            xcl::Stream::pollStreams(
+              device.get(), poll_req, 2, 2, &num_compl, 100, &ret));
+
+        if (num_compl == 0) {
+          printf("failed at step %d\n", i);
+        }
+    }
     // OpenCL Host Code Ends
 
     // Compare the device results with software results
