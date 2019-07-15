@@ -169,32 +169,36 @@ int main(int argc, char **argv) {
     // Initiating the WRITE transfer
     cl_stream_xfer_req wr_req{0};
 
-    wr_req.flags = CL_STREAM_EOT;
+    wr_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
     wr_req.priv_data = (void *)"write_a";
 
     // Thread 1 for writing data to input stream 1 independently in case of default blocking transfers.
-    std::thread thr1(xcl::Stream::writeStream,
-                     write_stream_a,
-                     h_a.data(),
-                     vector_size_bytes,
-                     &wr_req,
-                     &ret);
+    xcl::Stream::writeStream(
+        write_stream_a,
+        h_a.data(),
+        vector_size_bytes,
+        &wr_req,
+        &ret);
 
     // Initiating the READ transfer
     cl_stream_xfer_req rd_req{0};
-    rd_req.flags = CL_STREAM_EOT;
+    rd_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;;
     rd_req.priv_data = (void *)"read";
     // Output thread to read the stream data independently in case of default blocking transfers.
-    std::thread thr2(xcl::Stream::readStream,
-                     read_stream,
-                     hw_results.data(),
-                     vector_size_bytes,
-                     &rd_req,
-                     &ret);
+    xcl::Stream::readStream(
+        read_stream,
+        hw_results.data(),
+        vector_size_bytes,
+        &rd_req,
+        &ret);
 
-    // Waiting for all the threads to complete their respective operations.
-    thr1.join();
-    thr2.join();
+    // Checking the request completion
+    cl_streams_poll_req_completions poll_req[2]{0, 0}; // 2 Requests
+    auto num_compl = 2;
+    OCL_CHECK(ret,
+        xcl::Stream::pollStreams(
+          device.get(), poll_req, 2, 2, &num_compl, 100, &ret));
+
     // OpenCL Host Code Ends
 
     // Compare the device results with software results
