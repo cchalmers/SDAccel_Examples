@@ -57,7 +57,7 @@ decltype(&clReadStream) xcl::Stream::readStream = nullptr;
 decltype(&clWriteStream) xcl::Stream::writeStream = nullptr;
 decltype(&clPollStreams) xcl::Stream::pollStreams = nullptr;
 
-auto constexpr c_test_size = 256 * 1024 * 1024; // 256 MB data
+auto constexpr c_test_size = 4096; // 4 KB data
 
 ////////////////////RESET FUNCTION///////////////////////////
 int reset(int *a, int *sw_results, int *hw_results, int size) {
@@ -100,11 +100,6 @@ double calc_throput(cl::Event &wait_event, size_t vector_size_bytes) {
 ////////MAIN FUNCTION//////////
 int main(int argc, char **argv) {
     size_t size = c_test_size;
-    if (xcl::is_hw_emulation()) {
-        size = 4096; // 4KB for HW emulation
-    } else if (xcl::is_emulation()) {
-        size = 2 * 1024 * 1024; // 2MB for sw emulation
-    }
 
     // I/O Data Vectors
     std::vector<int, aligned_allocator<int>> h_a(size);
@@ -253,53 +248,59 @@ int main(int argc, char **argv) {
     std::cout
         << "############################################################\n";
 
-    // Launch the Kernel
-    cl::Event nb_wait_event;
-    OCL_CHECK(err, err = q.enqueueTask(krnl_adder1, NULL, &nb_wait_event));
+    for (int i = 0; i < 10000000; i++) {
 
-    // Initiating the WRITE transfer
-    cl_stream_xfer_req nb_wr_req{0};
+        // this test is really slow so print out some progress updates
+        if (i % 1000000 == 0) {
+          printf("at step %d\n", i);
+        }
 
-    nb_wr_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
-    nb_wr_req.priv_data = (void *)"nb_write_a";
+        // Launch the Kernel
+        cl::Event nb_wait_event;
+        OCL_CHECK(err, err = q.enqueueTask(krnl_adder1, NULL, &nb_wait_event));
 
-    // Writing data to input stream 1 independently in case of non-blocking transfers.
-    OCL_CHECK(
-        ret,
-        xcl::Stream::writeStream(
-            write_stream_a, h_a.data(), vector_size_bytes, &nb_wr_req, &ret));
+        // Initiating the WRITE transfer
+        cl_stream_xfer_req nb_wr_req{0};
 
-    // Initiating the READ transfer
-    cl_stream_xfer_req nb_rd_req{0};
-    nb_rd_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
-    nb_rd_req.priv_data = (void *)"nb_read";
-    // Reading the stream data independently in case of non-blocking transfers.
-    OCL_CHECK(ret,
-              xcl::Stream::readStream(read_stream,
-                                      hw_results.data(),
-                                      vector_size_bytes,
-                                      &nb_rd_req,
-                                      &ret));
+        nb_wr_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
+        nb_wr_req.priv_data = (void *)"nb_write_a";
 
-    // Checking the request completion
-    cl_streams_poll_req_completions poll_req[2]{0, 0}; // 2 Requests
-    auto num_compl = 2;
-    OCL_CHECK(ret,
-              xcl::Stream::pollStreams(
-                  device.get(), poll_req, 2, 2, &num_compl, 50000, &ret));
-    // Blocking API, waits for 2 poll request completion or 50000ms, whichever occurs first.
+        // Initiating the READ transfer
+        cl_stream_xfer_req nb_rd_req{0};
+        nb_rd_req.flags = CL_STREAM_EOT | CL_STREAM_NONBLOCKING;
+        nb_rd_req.priv_data = (void *)"nb_read";
+
+        // Writing data to input stream 1 independently in case of non-blocking transfers.
+        OCL_CHECK(ret,
+                  xcl::Stream::writeStream(
+                      write_stream_a, h_a.data(), vector_size_bytes, &nb_wr_req, &ret));
+
+        // Reading the stream data independently in case of non-blocking transfers.
+        OCL_CHECK(ret,
+                  xcl::Stream::readStream(read_stream,
+                                          hw_results.data(),
+                                          vector_size_bytes,
+                                          &nb_rd_req,
+                                          &ret));
+
+        // Blocking API, waits for 2 poll request completion or 2 ms, whichever occurs first.
+        cl_streams_poll_req_completions poll_req[2]{0, 0}; // 2 Requests
+        auto num_compl = 2;
+        OCL_CHECK(ret,
+                  xcl::Stream::pollStreams(
+                      device.get(), poll_req, 2, 2, &num_compl, 2, &ret));
+
+        if (num_compl == 0) {
+          std::cout << "failed at step " << i << std::endl;
+        }
+
+    }
 
     // Ensuring all OpenCL objects are released.
     q.finish();
 
-    throput = calc_throput(nb_wait_event, vector_size_bytes);
-    std::cout << "[ Case: 2 ] -> Throughput = " << throput << " MB/s\n";
-
-    // Compare the device results with software results
-    bool nb_match = verify(sw_results.data(), hw_results.data(), size);
-
     // Releasing Streams
     xcl::Stream::releaseStream(read_stream);
     xcl::Stream::releaseStream(write_stream_a);
-    return !b_match || !nb_match;
+    return !b_match;
 }
